@@ -79,6 +79,8 @@ RTCZero rtc;
 #define LED (13) // SOLoRa Red LED port pin
 // LED consumes ~1.1mA. 100ms pulse = 110uA*s = 0.0303uA*hrs
 
+#define MoistureSignal A0
+#define BatterySignal A7
 //
 // For normal use, we require that you edit the sketch to replace FILLMEIN
 // with values assigned by the TTN console. However, for regression tests,
@@ -96,21 +98,27 @@ RTCZero rtc;
 // This EUI must be in little-endian format, so least-significant-byte (LSB x x ... x x MSB)
 // first. When copying an EUI from ttnctl output, this means to reverse
 // the bytes. For TTN issued EUIs the last bytes should be 0xD5, 0xB3,0x70.
-static const u1_t PROGMEM APPEUI[8] = {0xA9, 0x09, 0x01, 0xD0, 0x7E, 0xD5, 0xB3, 0x70};
+static const u1_t PROGMEM APPEUI[8] = {0xD8, 0x29, 0x01, 0xD0, 0x7E, 0xD5, 0xB3, 0x70};
 void os_getArtEui(u1_t *buf) { memcpy_P(buf, APPEUI, 8); }
 
 // This should also be in little endian format, see above. (LSB x x ... x x MSB)
-static const u1_t PROGMEM DEVEUI[8] = {0x6F, 0xDA, 0x2A, 0x00, 0x68, 0xB4, 0x84, 0x00};
+static const u1_t PROGMEM DEVEUI[8] = {0xED, 0x77, 0x91, 0x67, 0x92, 0xDD, 0x5F, 0x00};
 void os_getDevEui(u1_t *buf) { memcpy_P(buf, DEVEUI, 8); }
 
 // This key should be in BIG endian format (or, since it is not really a
 // number but a block of memory, endianness does not really apply). In
 // practice, a key taken from the TTN console can be copied as-is.
 // (MSB x x x x x x x x x x x x x x LSB)
-static const u1_t PROGMEM APPKEY[16] = {0x26, 0x12, 0x02, 0x4C, 0x0C, 0x80, 0x02, 0xAE, 0xB3, 0xD9, 0xDE, 0x19, 0x91, 0x5E, 0x79, 0x6C};
+static const u1_t PROGMEM APPKEY[16] = {0x1C, 0x68, 0x44, 0xDB, 0xC3, 0x67, 0x71, 0xA7, 0x24, 0x8B, 0x07, 0x58, 0x16, 0x8F, 0x0E, 0x37};
 void os_getDevKey(u1_t *buf) { memcpy_P(buf, APPKEY, 16); }
 
-static uint8_t mydata[] = "Hello, world!";
+//static uint8_t mydata[] = "Hello, world!";
+struct myPacket_t
+{
+    uint16_t moisture;
+    uint16_t batteryVoltage;
+} mydata;
+
 static osjob_t send_packet_job;
 
 // Schedule TX every this many seconds (might become longer due to duty
@@ -305,6 +313,8 @@ void onEvent(ev_t ev)
     }
 }
 
+
+
 void send_packet(osjob_t *j)
 {
     // Check if there is not a current TX/RX job running
@@ -314,12 +324,16 @@ void send_packet(osjob_t *j)
     }
     else
     {
+        mydata.moisture = analogRead(MoistureSignal);
+        mydata.batteryVoltage = analogRead(BatterySignal);
         // Prepare upstream data transmission at the next possible time.
-        LMIC_setTxData2(1, mydata, sizeof(mydata) - 1, 0);
+        LMIC_setTxData2(1, (xref2u1_t)&mydata, sizeof(mydata), 0);
         DL(F("Packet queued"));
     }
     // Next TX is scheduled after TX_COMPLETE event.
 }
+
+
 
 void setup()
 {
@@ -330,6 +344,8 @@ void setup()
     {
         pinMode(SOLoRaPins[i], INPUT_PULLUP);
     }
+    mydata.moisture = 0xAAAA;
+    mydata.batteryVoltage = 0x5555;
 
     // digital pin LED as an output.
     pinMode(LED, OUTPUT);
