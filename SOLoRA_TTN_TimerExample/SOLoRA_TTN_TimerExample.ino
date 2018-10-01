@@ -81,7 +81,7 @@ RTCZero rtc;
 
 #define MOISTURE_SIGNAL A0
 #define BATTERY_SIGNAL A7
-#define MOISTURE_POWER (14)
+#define MOISTURE_POWER (15)
 //
 // For normal use, we require that you edit the sketch to replace FILLMEIN
 // with values assigned by the TTN console. However, for regression tests,
@@ -124,7 +124,7 @@ static osjob_t send_packet_job;
 
 // Schedule TX every this many seconds (might become longer due to duty
 // cycle limitations).
-const unsigned TX_INTERVAL = 60*60; // set fast in this example for debugging
+const unsigned TX_INTERVAL = (60*60); // set time in seconds
 
 // Pin mapping
 //#if defined(ARDUINO_SAMD_FEATHER_M0)
