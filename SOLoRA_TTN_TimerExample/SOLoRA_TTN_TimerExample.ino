@@ -80,7 +80,8 @@ RTCZero rtc;
 // LED consumes ~1.1mA. 100ms pulse = 110uA*s = 0.0303uA*hrs
 
 #define MOISTURE_SIGNAL A0
-#define BATTERY_SIGNAL A7
+#define RESERVOIR_SIGNAL A2
+#define CHARGE_SIGNAL A7
 #define MOISTURE_POWER (15)
 //
 // For normal use, we require that you edit the sketch to replace FILLMEIN
@@ -117,14 +118,15 @@ void os_getDevKey(u1_t *buf) { memcpy_P(buf, APPKEY, 16); }
 struct myPacket_t
 {
     uint16_t moisture;
-    uint16_t batteryVoltage;
+    uint16_t reservoir;
+    uint16_t chargeVoltage;
 } mydata;
 
 static osjob_t send_packet_job;
 
 // Schedule TX every this many seconds (might become longer due to duty
 // cycle limitations).
-const unsigned TX_INTERVAL = (60*60); // set time in seconds
+const unsigned TX_INTERVAL = (60*60*12); // set to 1/2 day in seconds
 
 // Pin mapping
 //#if defined(ARDUINO_SAMD_FEATHER_M0)
@@ -326,14 +328,12 @@ void send_packet(osjob_t *j)
     else
     {
         digitalWrite(MOISTURE_POWER, HIGH);
-        delay(10); // settling time
+        delay(100); // settling time
         mydata.moisture = analogRead(MOISTURE_SIGNAL);
+        mydata.reservoir = analogRead(RESERVOIR_SIGNAL);
         digitalWrite(MOISTURE_POWER, LOW);
 
-        analogReference(AR_INTERNAL1V0);
-        delay(10); // settling time
-        mydata.batteryVoltage = analogRead(BATTERY_SIGNAL);
-        analogReference(AR_INTERNAL2V23);
+        mydata.chargeVoltage = analogRead(CHARGE_SIGNAL);
 
         // Prepare upstream data transmission at the next possible time.
         LMIC_setTxData2(1, (xref2u1_t)&mydata, sizeof(mydata), 0);
@@ -348,8 +348,8 @@ void setup()
 {
     // initialize unused pins as inputs_pullup
     // other init functions will change pinMode to suit specific needs
-    const uint8_t SOLoRaPins[] = {5, 6, 7, 9, 10, 12, 16, 17, 18, 19, 20, 21}; //unused SOLoRa pins
-    //             (A)nalog #                          2   3    4   5  
+    const uint8_t SOLoRaPins[] = {5, 6, 7, 9, 10, 12, 17, 18, 19, 20, 21}; //unused SOLoRa pins
+    //             (A)nalog #                         3    4   5  
     //pin#=RFM95 signal: 3=IRQ, 4=RST, 8=CSn, 11= , 22=MISO, 23=MOSI, 24=SCK
     //other signals 0=RX, 1=Tx, 13=LED, 20=sda, 21=scl, 7=?, 9=?
     for (int i = 0; i < sizeof(SOLoRaPins); i++)
@@ -358,8 +358,7 @@ void setup()
     }
     pinMode (MOISTURE_POWER,OUTPUT);
     digitalWrite(MOISTURE_POWER, LOW);
-    mydata.moisture = 0xAAAA;
-    mydata.batteryVoltage = 0x5555;
+    analogReference(AR_INTERNAL1V0);
 
     // digital pin LED as an output.
     pinMode(LED, OUTPUT);
@@ -399,7 +398,7 @@ void setup()
     //initAccel();
     //
     // initialize ADC for Battery
-    //init_readBatteryVoltage();
+    //init_readchargeVoltage();
     //
 
 #if (WAKEUP_TYPE == RTC_TIMER)
