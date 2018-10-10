@@ -58,6 +58,8 @@
 #if (WAKEUP_TYPE == RTC_TIMER)
 /* Create an rtc object */
 RTCZero rtc;
+// Schedule TX every this many seconds 
+const unsigned TX_INTERVAL = (60*60*12); // set to 1/2 day in seconds
 #endif
 
 // Set DEBUG_MESSAGES to 1 to enable debug messages to USB terminal
@@ -86,6 +88,7 @@ RTCZero rtc;
 <<<<<<< HEAD
 #define CAYENNE (1)         // send data in Cayenne Low Power Protocol format (LPP)
 =======
+#define VCC_READ_POWER (17)
 >>>>>>> 329941de1503be5cf8db040709dd980675190d90
 //
 // For normal use, we require that you edit the sketch to replace FILLMEIN
@@ -140,10 +143,6 @@ struct cayenne_packet_t
 } cayenneData;
 
 static osjob_t send_packet_job;
-
-// Schedule TX every this many seconds (might become longer due to duty
-// cycle limitations).
-const unsigned TX_INTERVAL = (60*60*12); // set to 1/2 day in seconds
 
 // Pin mapping
 //#if defined(ARDUINO_SAMD_FEATHER_M0)
@@ -347,8 +346,12 @@ void send_packet(osjob_t *j)
         digitalWrite(MOISTURE_POWER, HIGH);
         delay(100); // settling time
         mydata.moisture = analogRead(MOISTURE_SIGNAL);
-        mydata.reservoir = analogRead(RESERVOIR_SIGNAL);
         digitalWrite(MOISTURE_POWER, LOW);
+
+        digitalWrite(VCC_READ_POWER, HIGH);
+        delay(10);
+        mydata.reservoir = analogRead(RESERVOIR_SIGNAL);
+        digitalWrite(VCC_READ_POWER, LOW);
 
         mydata.chargeVoltage = analogRead(CHARGE_SIGNAL);
 
@@ -373,10 +376,12 @@ void setup()
 {
     // initialize unused pins as inputs_pullup
     // other init functions will change pinMode to suit specific needs
-    const uint8_t SOLoRaPins[] = {5, 6, 7, 9, 10, 12, 17, 18, 19, 20, 21}; //unused SOLoRa pins
-    //             (A)nalog #                         3    4   5  
+    const uint8_t SOLoRaPins[] = {5, 6, 7, 9, 10, 12, 18, 19, 20, 21}; //unused SOLoRa pins
+    //             (A)nalog #                          4   5  
     //pin#=RFM95 signal: 3=IRQ, 4=RST, 8=CSn, 11= , 22=MISO, 23=MOSI, 24=SCK
-    //other signals 0=RX, 1=Tx, 13=LED, 20=sda, 21=scl, 7=?, 9=?
+    //SOLoRa signals 0=RX, 1=Tx, 13=LED, 20=sda, 21=scl, 7=nc, 9(A7)=chrV (charge Voltage Ain)
+    //specific to moisture app: 14(A0)=moisture Ain, 15=moisture power, 
+    //                          16(A2)=ResV Ain,     17=resV read power
     for (int i = 0; i < sizeof(SOLoRaPins); i++)
     {
         pinMode(SOLoRaPins[i], INPUT_PULLUP);
