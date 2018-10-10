@@ -83,6 +83,7 @@ RTCZero rtc;
 #define RESERVOIR_SIGNAL A2
 #define CHARGE_SIGNAL A7
 #define MOISTURE_POWER (15)
+#define CAYENNE (1)         // send data in Cayenne Low Power Protocol format (LPP)
 //
 // For normal use, we require that you edit the sketch to replace FILLMEIN
 // with values assigned by the TTN console. However, for regression tests,
@@ -121,6 +122,19 @@ struct myPacket_t
     uint16_t reservoir;
     uint16_t chargeVoltage;
 } mydata;
+
+struct cayenne_packet_t
+{
+    const   uint8_t     channelH = 1; 
+    const   uint8_t     idH = 104;      // Humitity used for moisture
+    uint8_t     dataH;  
+    const   uint8_t     channelC = 2;   // Charge Voltage
+    const   uint16_t    idC = 2;        // analog input type
+    uint8_t     dataC;  
+    const   uint8_t     channelR = 3; // Reservoir Voltage
+    const   uint16_t    idR = 2;
+    uint8_t     dataR;  
+} cayenneData;
 
 static osjob_t send_packet_job;
 
@@ -335,8 +349,16 @@ void send_packet(osjob_t *j)
 
         mydata.chargeVoltage = analogRead(CHARGE_SIGNAL);
 
+
+#if CAYENNE     // send data in Cayenne low-power-protocol format
+        cayenneData.dataH = mydata.moisture >> 2;
+        cayenneData.dataC = mydata.chargeVoltage;
+        cayenneData.dataR = mydata.reservoir;
+        LMIC_setTxData2(1, (xref2u1_t)&cayenneData, sizeof(cayenneData), 0);
+#else
         // Prepare upstream data transmission at the next possible time.
         LMIC_setTxData2(1, (xref2u1_t)&mydata, sizeof(mydata), 0);
+#endif
         DL(F("Packet queued"));
     }
     // Next TX is scheduled after TX_COMPLETE event.
@@ -425,7 +447,7 @@ void setup()
     LMIC_reset();
 
     LMIC_setLinkCheckMode(0);
-    LMIC_setDrTxpow(DR_SF7, 2); //
+    LMIC_setDrTxpow(DR_SF7, 10); //
     LMIC_selectSubBand(1);
 
     // Start job (sending automatically starts OTAA too)
