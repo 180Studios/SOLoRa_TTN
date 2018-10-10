@@ -83,7 +83,10 @@ RTCZero rtc;
 #define RESERVOIR_SIGNAL A2
 #define CHARGE_SIGNAL A7
 #define MOISTURE_POWER (15)
+<<<<<<< HEAD
 #define CAYENNE (1)         // send data in Cayenne Low Power Protocol format (LPP)
+=======
+>>>>>>> 329941de1503be5cf8db040709dd980675190d90
 //
 // For normal use, we require that you edit the sketch to replace FILLMEIN
 // with values assigned by the TTN console. However, for regression tests,
