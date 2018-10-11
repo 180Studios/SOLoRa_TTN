@@ -126,18 +126,20 @@ struct myPacket_t
     uint16_t chargeVoltage;
 } mydata;
 
+#pragma pack(push,1)  // align this structure on byte boundries
 struct cayenne_packet_t
 {
     const   uint8_t     channelH = 1; 
     const   uint8_t     idH = 104;      // Humitity used for moisture
-    uint8_t     dataH;  
+            uint8_t     dataH;  
     const   uint8_t     channelC = 2;   // Charge Voltage
-    const   uint16_t    idC = 2;        // analog input type
-    uint8_t     dataC;  
-    const   uint8_t     channelR = 3; // Reservoir Voltage
-    const   uint16_t    idR = 2;
-    uint8_t     dataR;  
+    const   uint8_t     idC = 2;        // analog input type
+            uint16_t    dataC; 
+    const   uint8_t     channelR = 3;   // Reservoir Voltage
+    const   uint8_t     idR = 2;
+            uint16_t    dataR;  
 } cayenneData;
+#pragma pack(pop)
 
 static osjob_t send_packet_job;
 
@@ -354,9 +356,9 @@ void send_packet(osjob_t *j)
 
 
 #if CAYENNE     // send data in Cayenne low-power-protocol format
-        cayenneData.dataH = mydata.moisture >> 2;
-        cayenneData.dataC = mydata.chargeVoltage;
-        cayenneData.dataR = mydata.reservoir;
+        cayenneData.dataH = (uint8_t)mydata.moisture >> 2;
+        cayenneData.dataC = (uint16_t)mydata.chargeVoltage;
+        cayenneData.dataR = (uint16_t)mydata.reservoir;
         LMIC_setTxData2(1, (xref2u1_t)&cayenneData, sizeof(cayenneData), 0);
 #else
         // Prepare upstream data transmission at the next possible time.
