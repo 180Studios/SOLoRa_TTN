@@ -1,8 +1,6 @@
 /*******************************************************************************
  * Copyright (c) 2015 Thomas Telkamp and Matthijs Kooijman
  * Copyright (c) 2018 Terry Moore, MCCI
- * Modified 2018 Joe Miller for SOLoRa.
- *              Also added sleep after 'hello world' sent 
  * 
  * Permission is hereby granted, free of charge, to anyone
  * obtaining a copy of this document and accompanying files,
@@ -32,12 +30,31 @@
  * Do not forget to define the radio type correctly in config.h.
  *
  *******************************************************************************/
+ /* Modified 2018,2019 Joe Miller for SOLoRa.
+ *      + Sensors added optional LM75 temperature and LIS3DH accelerometer
+ *      + added modifiable code to operate as either periodic timer wakeup or hardware interrupt
+ *      + Payloads are formatted for Cayenne services for data repository and visualization
+ *          - https://mydevices.com/cayenne/docs/lora/#lora-cayenne-low-power-payload
+ *      + Improvements made to decrease sleep currrent
+ ******************************************************************************/
 
 #include <lmic.h>
 #include <hal/hal.h>
 #include <SPI.h>
 //#include "LowPower.h"
 #include <RTCZero.h>
+#include "CayenneLPP.h"
+
+
+#define USE_TEMP_SENSOR         (1)  
+#if USE_TEMP_SENSOR 
+    #include <Wire.h>
+    #define LM75_I2CADDR             0x48
+    #define LM75_TEMP                0x00    /**< RAM reg - Temperature */
+#endif
+float temperature;
+
+
 
 // system operation type. Choose either RTC_TIMER wakeups for reporting (this example),
 //    or interrupt based (HW_ITNERRUPT), in which case your sensor must invoke a hardware
@@ -50,16 +67,19 @@
 //                  RISING to trigger when the pin goes from low to high,
 //                  FALLING for when the pin goes from high to low.
 //                  HIGH to trigger the interrupt whenever the pin is high.
-#define RTC_TIMER (0)
-#define HW_INTERRUPT (1)
+
+        // enumerated list of operating modes
+#define RTC_TIMER       (0)     
+#define HW_INTERRUPT    (1)    
 // Set wakeup type below.
-#define WAKEUP_TYPE RTC_TIMER //<<<<<<<<<<< Set this
+#define WAKEUP_TYPE RTC_TIMER //<<<<<<<<<<< Set this to RTC_TIMER or HW_INTERRUPT
 
 #if (WAKEUP_TYPE == RTC_TIMER)
 /* Create an rtc object */
 RTCZero rtc;
 // Schedule TX every this many seconds 
 const unsigned TX_INTERVAL = (60*60*12); // set to 1/2 day in seconds
+//const unsigned TX_INTERVAL = (30); // for testing
 #endif
 
 // Set DEBUG_MESSAGES to 1 to enable debug messages to USB terminal
@@ -123,21 +143,20 @@ struct myPacket_t
 {
     uint16_t moisture;
     uint16_t reservoir;
-    uint16_t chargeVoltage;
 } mydata;
 
 #pragma pack(push,1)  // align this structure on byte boundries
 struct cayenne_packet_t
 {
-    const   uint8_t     channelH = 1; 
-    const   uint8_t     idH = 104;      // Humitity used for moisture
-            uint8_t     dataH;  
-    const   uint8_t     channelC = 2;   // Charge Voltage
-    const   uint8_t     idC = 2;        // analog input type
-            uint16_t    dataC; 
-    const   uint8_t     channelR = 3;   // Reservoir Voltage
-    const   uint8_t     idR = 2;
-            uint16_t    dataR;  
+    const   uint8_t     channelH = 1;                // Moisture sensor
+    const   uint8_t     idH = LPP_RELATIVE_HUMIDITY;// 104 = Humitity (used here for moisture)
+            uint8_t     dataH;                     // 0.5%/LSB unsigned
+    const   uint8_t     channelt = 2;             // Temperature Sensor
+    const   uint8_t     idt = LPP_TEMPERATURE;   // 103, TEMPERATURE
+            int16_t     dataT;                  // 0.1C/LSB signed
+    const   uint8_t     channelR = 3;          // Reservoir Voltage
+    const   uint8_t     idR = 2;              // 2 = Analog input 
+            int16_t     dataR;               // scale: 0.01/LSB signed
 } cayenneData;
 #pragma pack(pop)
 
@@ -158,6 +177,27 @@ const lmic_pinmap lmic_pins = {
 //#else
 //# error "Unknown target"
 //#endif
+
+
+float getTemp(void){
+    float temperature;
+    uint16_t val;
+
+    // send the device address then the register pointer byte
+    Wire.beginTransmission(LM75_I2CADDR);
+    Wire.write(LM75_TEMP);
+    Wire.endTransmission(false);
+
+    // resend device address then get the 2 returned bytes
+    Wire.requestFrom(LM75_I2CADDR, (uint8_t)2);
+
+    // data is returned as 2 bytes big endian
+    val = Wire.read() << 8;
+    val |= Wire.read();
+
+    temperature = (float)val * 0.125/32.0;
+    return temperature;
+}
 
 void alarmMatch()
 {
@@ -343,27 +383,39 @@ void send_packet(osjob_t *j)
     else
     {
         digitalWrite(MOISTURE_POWER, HIGH);
-        delay(100); // settling time
-        mydata.moisture = analogRead(MOISTURE_SIGNAL);
+#ifdef USE_TEMP_SENSOR
+        temperature = getTemp();
+#endif
+        delay(100); // settling time for moisture reading
+        mydata.moisture = analogRead(MOISTURE_SIGNAL); 
         digitalWrite(MOISTURE_POWER, LOW);
-
         digitalWrite(VCC_READ_POWER, HIGH);
         delay(10);
         mydata.reservoir = analogRead(RESERVOIR_SIGNAL);
         digitalWrite(VCC_READ_POWER, LOW);
+            
 
-        mydata.chargeVoltage = analogRead(CHARGE_SIGNAL);
-
-
-#if CAYENNE     // send data in Cayenne low-power-protocol format
-        cayenneData.dataH = (uint8_t)mydata.moisture >> 2;
-        cayenneData.dataC = (uint16_t)mydata.chargeVoltage;
-        cayenneData.dataR = (uint16_t)mydata.reservoir;
-        LMIC_setTxData2(1, (xref2u1_t)&cayenneData, sizeof(cayenneData), 0);
+#if CAYENNE     // send data in Cayenne low-power-protocol (LPP) format
+        // adjust raw 12bits value to Cayenne 0.5%/LSB 8-bit range
+        mydata.moisture = (uint8_t)((float)mydata.moisture * -0.458F +390.3F);
+        cayenneData.dataH = (uint8_t)mydata.moisture;
+    
+        //swap bytes on the next two fields to match endianess of Cayenne inputs
+        cayenneData.dataT = (((int16_t)(temperature * 10.0F)>>8)&0x00ff) | 
+            (((int16_t)(temperature * 10.0F)<<8)&0xff00); // reverse endianess       
+     
+        // adjust raw value to voltage * 100 for Cayenne analog input format
+#define VOLTAGEDIVIDERFACTOR (0.581F) // includes ADC and Cayenne 0.01 resolution factors
+        mydata.reservoir = (int16_t)((float)mydata.reservoir * VOLTAGEDIVIDERFACTOR);
+        cayenneData.dataR = (((uint16_t)mydata.reservoir>>8)&0x00ff) | 
+            (((uint16_t)mydata.reservoir<<8)&0xff00); // reverse endianess       
+       LMIC_setTxData2(1, (xref2u1_t)&cayenneData, sizeof(cayenneData), 0);
 #else
         // Prepare upstream data transmission at the next possible time.
         LMIC_setTxData2(1, (xref2u1_t)&mydata, sizeof(mydata), 0);
 #endif
+        D("temp: " );
+        DL2(cayenneData.dataT, DEC);
         DL(F("Packet queued"));
     }
     // Next TX is scheduled after TX_COMPLETE event.
@@ -373,9 +425,14 @@ void send_packet(osjob_t *j)
 
 void setup()
 {
-    // initialize unused pins as inputs_pullup
+    // SOLoRa hardware specific setup
+    // initialize unused pins as inputs_pullup. This will reduce sleep current
     // other init functions will change pinMode to suit specific needs
+#if USE_TEMP_SENSOR
+    const uint8_t SOLoRaPins[] = {5, 6, 7, 9, 10, 12, 18, 19}; //unused SOLoRa pins
+#else
     const uint8_t SOLoRaPins[] = {5, 6, 7, 9, 10, 12, 18, 19, 20, 21}; //unused SOLoRa pins
+#endif
     //             (A)nalog #                          4   5  
     //pin#=RFM95 signal: 3=IRQ, 4=RST, 8=CSn, 11= , 22=MISO, 23=MOSI, 24=SCK
     //SOLoRa signals 0=RX, 1=Tx, 13=LED, 20=sda, 21=scl, 7=nc, 9(A7)=chrV (charge Voltage Ain)
@@ -388,6 +445,10 @@ void setup()
     pinMode (MOISTURE_POWER,OUTPUT);
     digitalWrite(MOISTURE_POWER, LOW);
     analogReference(AR_INTERNAL1V0);
+
+#if USE_TEMP_SENSOR   
+    Wire.begin();                // join i2c bus (address optional for master)
+#endif
 
     // digital pin LED as an output.
     pinMode(LED, OUTPUT);
@@ -430,14 +491,16 @@ void setup()
     //init_readchargeVoltage();
     //
 
+    // end of SOLoRa specific hardware setup
+
 #if (WAKEUP_TYPE == RTC_TIMER)
     // Initialize RTC
     rtc.begin();
     // Use RTC as a second timer instead of calendar
     rtc.setEpoch(0);
     rtc.attachInterrupt(alarmMatch);
+    DL(F("RTC initalized"));
 #endif
-
     //-ignor this stuff. I used it for testing
     // rtc.standbyMode();
     // SCB->SCR |= SCB_SCR_SLEEPDEEP_Msk;
@@ -457,6 +520,7 @@ void setup()
     LMIC_setDrTxpow(DR_SF7, 10); //
     LMIC_selectSubBand(1);
 
+    DL(F("LMIC initialized"));
     // Start job (sending automatically starts OTAA too)
     send_packet(&send_packet_job);
 }
