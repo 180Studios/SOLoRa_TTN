@@ -1,4 +1,3 @@
-UNDER DEVELOPMENT
 /*******************************************************************************
  * Copyright (c) 2015 Thomas Telkamp and Matthijs Kooijman
  * Copyright (c) 2018 Terry Moore, MCCI
@@ -47,7 +46,10 @@ UNDER DEVELOPMENT
 #include "CayenneLPP.h"
 
 
-#define USE_TEMP_SENSOR         (1)  
+#define USE_TEMP_SENSOR         (0)
+#define USE_ACCEL               (0) 
+#define USE_BAT_VOLTAGE_READ    (1)
+
 #if USE_TEMP_SENSOR 
     #include <Wire.h>
     #define LM75_I2CADDR             0x48
@@ -72,12 +74,17 @@ float temperature;
         // enumerated list of operating modes
 #define RTC_TIMER       (0)     
 #define HW_INTERRUPT    (1)    
+
 // Set wakeup type below.
 #define WAKEUP_TYPE HW_INTERRUPT //<<<<<<<<<<< Set this to RTC_TIMER or HW_INTERRUPT
+//#define WAKEUP_TYPE RTC_TIMER
 
 #if (WAKEUP_TYPE == RTC_TIMER)
 /* Create an rtc object */
 RTCZero rtc;
+// Schedule TX every this many seconds 
+const unsigned TX_INTERVAL = (60*60*12); // set to 1/2 day in seconds
+//const unsigned TX_INTERVAL = (30); // for testing
 #endif
 
 // Set DEBUG_MESSAGES to 1 to enable debug messages to USB terminal
@@ -99,6 +106,7 @@ RTCZero rtc;
 #define LED (13) // SOLoRa Red LED port pin
 // LED consumes ~1.1mA. 100ms pulse = 110uA*s = 0.0303uA*hrs
 
+#define INTERRUPT_PIN 19
 #define MOISTURE_SIGNAL A0
 #define RESERVOIR_SIGNAL A2
 #define CHARGE_SIGNAL A7
@@ -122,18 +130,18 @@ RTCZero rtc;
 // This EUI must be in little-endian format, so least-significant-byte (LSB x x ... x x MSB)
 // first. When copying an EUI from ttnctl output, this means to reverse
 // the bytes. For TTN issued EUIs the last bytes should be 0xD5, 0xB3,0x70.
-static const u1_t PROGMEM APPEUI[8] = {0xA9, 0x09, 0x01, 0xD0, 0x7E, 0xD5, 0xB3, 0x70};
+static const u1_t PROGMEM APPEUI[8] = { 0xE8, 0x17, 0x02, 0xD0, 0x7E, 0xD5, 0xB3, 0x70 };
 void os_getArtEui(u1_t *buf) { memcpy_P(buf, APPEUI, 8); }
 
 // This should also be in little endian format, see above. (LSB x x ... x x MSB)
-static const u1_t PROGMEM DEVEUI[8] = {0x6F, 0xDA, 0x2A, 0x00, 0x68, 0xB4, 0x84, 0x00};
+static const u1_t PROGMEM DEVEUI[8] = { 0x40, 0x3A, 0x92, 0xFF, 0x88, 0x66, 0xE7, 0x00 };
 void os_getDevEui(u1_t *buf) { memcpy_P(buf, DEVEUI, 8); }
 
 // This key should be in BIG endian format (or, since it is not really a
 // number but a block of memory, endianness does not really apply). In
 // practice, a key taken from the TTN console can be copied as-is.
 // (MSB x x x x x x x x x x x x x x LSB)
-static const u1_t PROGMEM APPKEY[16] = {0x26, 0x12, 0x02, 0x4C, 0x0C, 0x80, 0x02, 0xAE, 0xB3, 0xD9, 0xDE, 0x19, 0x91, 0x5E, 0x79, 0x6C};
+static const u1_t PROGMEM APPKEY[16] = { 0x97, 0xDC, 0xB5, 0x35, 0xFE, 0xA5, 0x2C, 0xA2, 0x8F, 0x8B, 0x79, 0xD6, 0x6C, 0xF6, 0x8F, 0xF6 };
 void os_getDevKey(u1_t *buf) { memcpy_P(buf, APPKEY, 16); }
 
 //static uint8_t mydata[] = "Hello, world!";
@@ -176,32 +184,36 @@ const lmic_pinmap lmic_pins = {
 //# error "Unknown target"
 //#endif
 
+#if USE_TEMP_SENSOR   
+    float getTemp(void){
+        float temperature;
+        uint16_t val;
 
-float getTemp(void){
-    float temperature;
-    uint16_t val;
+        // send the device address then the register pointer byte
+        Wire.beginTransmission(LM75_I2CADDR);
+        Wire.write(LM75_TEMP);
+        Wire.endTransmission(false);
 
-    // send the device address then the register pointer byte
-    Wire.beginTransmission(LM75_I2CADDR);
-    Wire.write(LM75_TEMP);
-    Wire.endTransmission(false);
+        // resend device address then get the 2 returned bytes
+        Wire.requestFrom(LM75_I2CADDR, (uint8_t)2);
 
-    // resend device address then get the 2 returned bytes
-    Wire.requestFrom(LM75_I2CADDR, (uint8_t)2);
+        // data is returned as 2 bytes big endian
+        val = Wire.read() << 8;
+        val |= Wire.read();
 
-    // data is returned as 2 bytes big endian
-    val = Wire.read() << 8;
-    val |= Wire.read();
-
-    temperature = (float)val * 0.125/32.0;
-    return temperature;
-}
+        temperature = (float)val * 0.125/32.0;
+        return temperature;
+    }
+#endif
 
 void alarmMatch()
 {
     // Schedule next packet with the os_ to send packet.
     os_setTimedCallback(&send_packet_job, 50, send_packet);
+            digitalWrite(LED, HIGH);  // temporary breadcrumb
+
 }
+
 
 void onEvent(ev_t ev)
 {
@@ -328,7 +340,7 @@ void onEvent(ev_t ev)
         rtc.standbyMode();
         // try RTCZERO with LP_Sleep() in the future
 #else
-        // WAKEUP_TYPE == HW_INTERRUPT
+        // infer WAKEUP_TYPE == HW_INTERRUPT
         SCB->SCR |= SCB_SCR_SLEEPDEEP_Msk;
         __DSB();
         __WFI();
@@ -381,7 +393,7 @@ void send_packet(osjob_t *j)
     else
     {
         digitalWrite(MOISTURE_POWER, HIGH);
-#ifdef USE_TEMP_SENSOR
+#if USE_TEMP_SENSOR
         temperature = getTemp();
 #endif
         delay(100); // settling time for moisture reading
@@ -440,6 +452,8 @@ void setup()
     {
         pinMode(SOLoRaPins[i], INPUT_PULLUP);
     }
+
+    pinMode(INTERRUPT_PIN, INPUT_PULLDOWN);
     pinMode (MOISTURE_POWER,OUTPUT);
     digitalWrite(MOISTURE_POWER, LOW);
     analogReference(AR_INTERNAL1V0);
@@ -476,18 +490,26 @@ void setup()
     //
     // init calls for SOLoRa on-board features
     //
-    // uncomment next two lines if enabling on-board accelerometer OR termperature sensor
-    //Wire.begin();                // join i2c bus (address optional for master)
-    //Serial.begin(9600);          // start serial communication at 9600bps
-    //
-    // initalize temperature sensor
-    //initTemp();
-    // initial accelerometer
-    //initAccel();
-    //
-    // initialize ADC for Battery
-    //init_readchargeVoltage();
-    //
+        #if USE_TEMP_SENSOR || USE_ACCEL
+            Wire.begin();                // join i2c bus (address optional for master)
+            Serial.begin(9600);          // start serial communication at 9600bps
+        #endif
+
+        #if USE_TEMP_SENSOR
+            // initalize temperature sensor
+            initTemp();
+        #endif
+
+        #if USE_ACCEL
+            // initial accelerometer
+            initAccel();
+        #endif
+
+        // #if USE_BAT_VOLTAGE_READ
+        //     // initialize ADC for Battery
+        //     init_readchargeVoltage();
+        //     //
+        // #endif
 
     // end of SOLoRa specific hardware setup
 
@@ -498,7 +520,10 @@ void setup()
     rtc.setEpoch(0);
     rtc.attachInterrupt(alarmMatch);
     DL(F("RTC initalized"));
+#elif (WAKEUP_TYPE == HW_INTERRUPT)
+    attachInterrupt(digitalPinToInterrupt(INTERRUPT_PIN), alarmMatch, RISING);
 #endif
+
     //-ignor this stuff. I used it for testing
     // rtc.standbyMode();
     // SCB->SCR |= SCB_SCR_SLEEPDEEP_Msk;
