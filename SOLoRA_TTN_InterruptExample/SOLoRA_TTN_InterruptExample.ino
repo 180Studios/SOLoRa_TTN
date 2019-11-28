@@ -341,10 +341,12 @@ void onEvent(ev_t ev)
         // try RTCZERO with LP_Sleep() in the future
 #else
         // infer WAKEUP_TYPE == HW_INTERRUPT
-        SCB->SCR |= SCB_SCR_SLEEPDEEP_Msk;
-        __DSB();
-        __WFI();
-        // will only wakeup with pin interrupt
+// I had to comment-out this section to get the pin interrupt to working
+// need to follow up later. Also measure sleep current impact
+        // SCB->SCR |= SCB_SCR_SLEEPDEEP_Msk;
+        // __DSB();
+        // __WFI();
+        // will wakeup with pin interrupt
 #endif
         break;
     case EV_LOST_TSYNC:
